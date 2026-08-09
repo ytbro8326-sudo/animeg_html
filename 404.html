@@ -490,26 +490,58 @@
       };
     }
 
+    function getProxyUrl(url) {
+      if (!url) return '';
+      if (url.startsWith('https://anivexa.onrender.com/proxy')) return url;
+      return `https://anivexa.onrender.com/proxy?url=${encodeURIComponent(url)}&referer=https://www.animegg.org/`;
+    }
+
+    function getBestHdStream(streams) {
+      if (!streams || streams.length === 0) return null;
+      const priority = ["1080p", "720p", "480p", "360p"];
+      
+      // 1. Look for SUB stream with highest resolution
+      for (const res of priority) {
+        const found = streams.find(s => (s.quality || s.server || '').includes(res) && (s.quality || s.server || '').includes('SUB'));
+        if (found) return found;
+      }
+      // 2. Look for any SUB stream
+      const subFound = streams.find(s => (s.quality || s.server || '').includes('SUB'));
+      if (subFound) return subFound;
+
+      // 3. Look for DUB stream with highest resolution
+      for (const res of priority) {
+        const found = streams.find(s => (s.quality || s.server || '').includes(res));
+        if (found) return found;
+      }
+
+      return streams[0];
+    }
+
     function playStream(url) {
       const playerWrap = document.getElementById('playerWrap');
       const video = document.getElementById('videoPlayer');
       playerWrap.style.display = 'block';
 
+      const proxiedUrl = getProxyUrl(url);
+
       if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
 
-      if (url.includes('.m3u8')) {
+      if (proxiedUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
           hlsInstance = new Hls();
-          hlsInstance.loadSource(url);
+          hlsInstance.loadSource(proxiedUrl);
           hlsInstance.attachMedia(video);
-          hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+            video.play().catch(() => { video.muted = true; video.play(); });
+          });
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = url;
-          video.play();
+          video.src = proxiedUrl;
+          video.play().catch(() => { video.muted = true; video.play(); });
         }
       } else {
-        video.src = url;
-        video.play();
+        video.src = proxiedUrl;
+        video.play().catch(() => { video.muted = true; video.play(); });
       }
     }
 
@@ -567,18 +599,21 @@
 
         const streams = data.results.streams || [];
         if (streams.length > 0) {
-          playStream(streams[0].url);
+          const bestStream = getBestHdStream(streams);
+          playStream(bestStream.url);
+
           streams.forEach((st, idx) => {
+            const pUrl = getProxyUrl(st.url);
             const div = document.createElement('div');
             div.className = 'url-box';
             div.innerHTML = `
               <div>
                 <strong style="font-size:0.8rem; color:#fff;">${st.server || 'Stream'}</strong>
-                <div class="url-text" id="streamUrl_${idx}">${st.url}</div>
+                <div class="url-text" id="streamUrl_${idx}">${pUrl}</div>
               </div>
               <div style="display:flex; gap:6px; flex-shrink:0;">
                 <button class="btn-action btn-play" onclick="playStream('${st.url}')">▶ Play</button>
-                <button class="btn-action" onclick="copyText('${st.url}')">Copy</button>
+                <button class="btn-action" onclick="copyText('${pUrl}')">Copy</button>
               </div>
             `;
             streamsList.appendChild(div);
@@ -603,7 +638,8 @@
     window.AnimeGGAPI = {
       getStreams: getAnimeGGStreams,
       search: searchAnimeGG,
-      loadDatasets: loadAllDatasets
+      loadDatasets: loadAllDatasets,
+      getProxyUrl: getProxyUrl
     };
 
     // Parse MAL ID and Episode from URL Path (/21/1), Query (?21/1 or ?mal_id=21&ep=1), or Hash (#21/1)
@@ -641,7 +677,7 @@
       return null;
     }
 
-    // Auto-run when URL has parameters (Direct API / JSON response mode)
+    // Auto-run when URL has parameters
     window.addEventListener('DOMContentLoaded', async () => {
       const params = parseParamsFromUrl();
       if (!params) return;
@@ -649,9 +685,9 @@
       document.getElementById('malId').value = params.malId;
       document.getElementById('epNum').value = params.epNum;
 
-      const isUIOnly = window.location.search.includes('ui=true') || window.location.hash.includes('ui=true');
+      const isJsonOnly = window.location.search.includes('json=true') || window.location.hash.includes('json=true');
 
-      if (!isUIOnly) {
+      if (isJsonOnly) {
         // Render Raw JSON API Response directly on screen
         document.body.innerHTML = `
           <style>
@@ -661,7 +697,7 @@
             .top-bar a:hover { text-decoration: underline; }
           </style>
           <div class="top-bar">
-            <a href="?mal_id=${params.malId}&ep=${params.epNum}&ui=true">📺 Switch to Web UI & Video Player</a>
+            <a href="?mal_id=${params.malId}&ep=${params.epNum}">📺 Switch to Web UI & Video Player</a>
           </div>
           <pre id="jsonOutput">Extracting streams for MAL ID ${params.malId} Episode ${params.epNum}...</pre>
         `;
@@ -678,6 +714,7 @@
           }, null, 2);
         }
       } else {
+        // Automatically extract streams & autoplay HD stream in player
         btn.click();
       }
     });
