@@ -733,6 +733,9 @@
         let _fetchToken = 0;
         const COUNTDOWN_S = 10;
 
+        const streamCache = new Map();
+        let preFetchAbortToken = 0;
+
         function getProxyUrl(url) {
             if (!url) return '';
             if (url.startsWith('https://anivexa.onrender.com/proxy')) return url;
@@ -804,65 +807,101 @@
         }
 
         async function getAnimeGGStreams(malId, epNum) {
-            const animeEntry = await searchAnimeGG(malId);
-            if (!animeEntry) throw new Error(`MAL ID ${malId} not found in AnimeGG datasets`);
+            const cacheKey = `${malId}_${epNum}`;
+            if (streamCache.has(cacheKey)) {
+                return await streamCache.get(cacheKey);
+            }
 
-            const title = animeEntry.title || `Anime ${malId}`;
-            const episodes = animeEntry.episodes || [];
-            const matchingEp = episodes.find(ep => ep.ep === parseInt(epNum));
+            const fetchPromise = (async () => {
+                const animeEntry = await searchAnimeGG(malId);
+                if (!animeEntry) throw new Error(`MAL ID ${malId} not found in AnimeGG datasets`);
 
-            if (!matchingEp) throw new Error(`Episode ${epNum} for MAL ID ${malId} ('${title}') not found`);
+                const title = animeEntry.title || `Anime ${malId}`;
+                const episodes = animeEntry.episodes || [];
+                const matchingEp = episodes.find(ep => ep.ep === parseInt(epNum));
 
-            const subEmbed = matchingEp.sub;
-            const dubEmbed = matchingEp.dub;
-            const streams = [];
+                if (!matchingEp) throw new Error(`Episode ${epNum} for MAL ID ${malId} ('${title}') not found`);
 
-            if (dubEmbed) {
-                const dubRes = await extractEmbedSources(dubEmbed);
-                Object.keys(dubRes).forEach(label => {
-                    streams.push({
-                        server: `AnimeGG DUB (${label})`,
-                        url: dubRes[label],
-                        type: "mp4",
-                        quality: label,
-                        lang: "dub",
-                        embed_url: dubEmbed
+                const subEmbed = matchingEp.sub;
+                const dubEmbed = matchingEp.dub;
+                const streams = [];
+
+                if (dubEmbed) {
+                    const dubRes = await extractEmbedSources(dubEmbed);
+                    Object.keys(dubRes).forEach(label => {
+                        streams.push({
+                            server: `AnimeGG DUB (${label})`,
+                            url: dubRes[label],
+                            type: "mp4",
+                            quality: label,
+                            lang: "dub",
+                            embed_url: dubEmbed
+                        });
                     });
-                });
-            }
-
-            if (subEmbed) {
-                const subRes = await extractEmbedSources(subEmbed);
-                Object.keys(subRes).forEach(label => {
-                    streams.push({
-                        server: `AnimeGG SUB (${label})`,
-                        url: subRes[label],
-                        type: "mp4",
-                        quality: label,
-                        lang: "sub",
-                        embed_url: subEmbed
-                    });
-                });
-            }
-
-            if (streams.length === 0) {
-                if (dubEmbed) streams.push({ server: "AnimeGG DUB (Embed)", url: dubEmbed, type: "iframe", quality: "Embed", lang: "dub" });
-                if (subEmbed) streams.push({ server: "AnimeGG SUB (Embed)", url: subEmbed, type: "iframe", quality: "Embed", lang: "sub" });
-            }
-
-            return {
-                status: "success",
-                server: "AnimeGG",
-                malId: parseInt(malId),
-                episode: parseInt(epNum),
-                animeTitle: title,
-                subEmbed: subEmbed,
-                dubEmbed: dubEmbed,
-                results: {
-                    stream_url: streams.length > 0 ? streams[0].url : null,
-                    streams: streams
                 }
-            };
+
+                if (subEmbed) {
+                    const subRes = await extractEmbedSources(subEmbed);
+                    Object.keys(subRes).forEach(label => {
+                        streams.push({
+                            server: `AnimeGG SUB (${label})`,
+                            url: subRes[label],
+                            type: "mp4",
+                            quality: label,
+                            lang: "sub",
+                            embed_url: subEmbed
+                        });
+                    });
+                }
+
+                if (streams.length === 0) {
+                    if (dubEmbed) streams.push({ server: "AnimeGG DUB (Embed)", url: dubEmbed, type: "iframe", quality: "Embed", lang: "dub" });
+                    if (subEmbed) streams.push({ server: "AnimeGG SUB (Embed)", url: subEmbed, type: "iframe", quality: "Embed", lang: "sub" });
+                }
+
+                return {
+                    status: "success",
+                    server: "AnimeGG",
+                    malId: parseInt(malId),
+                    episode: parseInt(epNum),
+                    animeTitle: title,
+                    subEmbed: subEmbed,
+                    dubEmbed: dubEmbed,
+                    results: {
+                        stream_url: streams.length > 0 ? streams[0].url : null,
+                        streams: streams
+                    }
+                };
+            })();
+
+            streamCache.set(cacheKey, fetchPromise);
+            return await fetchPromise;
+        }
+
+        async function preExtractNextEpisodes(malId, currentEpNum, totalToFetch = 50) {
+            const myPrefetchToken = ++preFetchAbortToken;
+            const startEp = parseInt(currentEpNum, 10) + 1;
+
+            const animeEntry = await searchAnimeGG(malId);
+            if (!animeEntry || !animeEntry.episodes) return;
+
+            const episodes = animeEntry.episodes;
+            const maxEp = Math.max(...episodes.map(e => e.ep));
+
+            for (let ep = startEp; ep <= Math.min(startEp + totalToFetch - 1, maxEp); ep++) {
+                if (myPrefetchToken !== preFetchAbortToken) break;
+
+                const cacheKey = `${malId}_${ep}`;
+                if (!streamCache.has(cacheKey)) {
+                    try {
+                        await getAnimeGGStreams(malId, ep);
+                        if (myPrefetchToken !== preFetchAbortToken) break;
+                    } catch (e) {
+                        // Silently handle background prefetch errors
+                    }
+                    await new Promise(r => setTimeout(r, 350));
+                }
+            }
         }
 
         function toggleBar() {
@@ -1129,6 +1168,9 @@
                     const best = getBestHdStream(streams, lang);
                     playStream(best);
                     renderServerPanel(streams);
+
+                    // Silently pre-extract next 50 episodes in background while user watches
+                    preExtractNextEpisodes(malId, ep, 50);
                 } else {
                     document.getElementById('sp-error').style.display = 'block';
                     document.getElementById('sp-error').textContent = `No streams available for MAL ${malId} Ep ${ep}.`;
