@@ -650,6 +650,10 @@
                         <div class="spin"></div>
                         <span>Extracting...</span>
                     </div>
+                    <div id="prefetch-status" style="display:none; align-items:center; gap:5px; color:#4ade80; font-size:12px; font-weight:600; background:rgba(74, 222, 128, 0.12); padding:5px 12px; border-radius:8px; border:1px solid rgba(74, 222, 128, 0.25);">
+                        <span id="prefetch-icon">✓</span>
+                        <span id="prefetch-status-text">+50 Ep Ready</span>
+                    </div>
                 </div>
 
                 <div id="srv-wrap">
@@ -881,26 +885,56 @@
         async function preExtractNextEpisodes(malId, currentEpNum, totalToFetch = 50) {
             const myPrefetchToken = ++preFetchAbortToken;
             const startEp = parseInt(currentEpNum, 10) + 1;
+            const statusEl = document.getElementById('prefetch-status');
+            const statusIcon = document.getElementById('prefetch-icon');
+            const statusText = document.getElementById('prefetch-status-text');
 
             const animeEntry = await searchAnimeGG(malId);
             if (!animeEntry || !animeEntry.episodes) return;
 
             const episodes = animeEntry.episodes;
             const maxEp = Math.max(...episodes.map(e => e.ep));
+            const endEp = Math.min(startEp + totalToFetch - 1, maxEp);
+            const targetCount = Math.max(0, endEp - startEp + 1);
 
-            for (let ep = startEp; ep <= Math.min(startEp + totalToFetch - 1, maxEp); ep++) {
-                if (myPrefetchToken !== preFetchAbortToken) break;
+            if (targetCount === 0) return;
+
+            if (statusEl && statusText) {
+                statusEl.style.display = 'flex';
+                statusEl.style.color = '#a78bfa';
+                statusEl.style.background = 'rgba(167, 139, 250, 0.12)';
+                statusEl.style.borderColor = 'rgba(167, 139, 250, 0.25)';
+                if (statusIcon) statusIcon.textContent = '⚡';
+                statusText.textContent = `Pre-extracting +${targetCount} Ep...`;
+            }
+
+            let fetchedCount = 0;
+            for (let ep = startEp; ep <= endEp; ep++) {
+                if (myPrefetchToken !== preFetchAbortToken) return;
 
                 const cacheKey = `${malId}_${ep}`;
                 if (!streamCache.has(cacheKey)) {
                     try {
                         await getAnimeGGStreams(malId, ep);
-                        if (myPrefetchToken !== preFetchAbortToken) break;
+                        if (myPrefetchToken !== preFetchAbortToken) return;
                     } catch (e) {
                         // Silently handle background prefetch errors
                     }
                     await new Promise(r => setTimeout(r, 350));
                 }
+                fetchedCount++;
+                if (statusText && myPrefetchToken === preFetchAbortToken) {
+                    statusText.textContent = `Pre-extracting (${fetchedCount}/${targetCount})...`;
+                }
+            }
+
+            if (myPrefetchToken === preFetchAbortToken && statusEl && statusText) {
+                statusEl.style.display = 'flex';
+                statusEl.style.color = '#4ade80';
+                statusEl.style.background = 'rgba(74, 222, 128, 0.12)';
+                statusEl.style.borderColor = 'rgba(74, 222, 128, 0.25)';
+                if (statusIcon) statusIcon.textContent = '✓';
+                statusText.textContent = `+${targetCount} Ep Ready`;
             }
         }
 
@@ -1145,7 +1179,9 @@
             document.title = `AnimeGG · MAL ${malId} · Ep ${ep} · ${lang.toUpperCase()}`;
 
             const spinner = document.getElementById('extract-spinner');
+            const prefetchStatus = document.getElementById('prefetch-status');
             if (spinner) spinner.style.display = 'flex';
+            if (prefetchStatus) prefetchStatus.style.display = 'none';
 
             document.getElementById('srv-toggle-btn').classList.add('show');
             document.getElementById('quality-row').innerHTML = '';
@@ -1169,7 +1205,7 @@
                     playStream(best);
                     renderServerPanel(streams);
 
-                    // Silently pre-extract next 50 episodes in background while user watches
+                    // Silently pre-extract next 50 episodes in background after current episode plays
                     preExtractNextEpisodes(malId, ep, 50);
                 } else {
                     document.getElementById('sp-error').style.display = 'block';
