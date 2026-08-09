@@ -953,6 +953,7 @@
             const srvList = document.getElementById('server-list');
             const spLoad = document.getElementById('sp-loading');
             const spErr = document.getElementById('sp-error');
+            const srvBtn = document.getElementById('srv-toggle-btn');
 
             spLoad.style.display = 'none';
             spErr.style.display = 'none';
@@ -962,17 +963,31 @@
             if (!streams || !streams.length) {
                 spErr.style.display = 'block';
                 spErr.textContent = 'No streams found for this episode.';
+                if (srvBtn) {
+                    srvBtn.innerHTML = `
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="2" y="3" width="20" height="4" rx="1" />
+                            <rect x="2" y="10" width="20" height="4" rx="1" />
+                            <rect x="2" y="17" width="20" height="4" rx="1" />
+                        </svg>
+                        Servers
+                    `;
+                }
                 return;
             }
 
             const langStreams = streams.filter(s => s.lang === currentLang);
             const displayStreams = langStreams.length > 0 ? langStreams : streams;
 
-            const QUALITIES = ["1080p", "720p", "480p", "360p"];
-            QUALITIES.forEach(q => {
+            // Dynamically gather all resolutions found
+            const qualSet = new Set(["1080p", "720p", "480p", "360p"]);
+            streams.forEach(s => { if (s.quality && s.quality !== 'Embed') qualSet.add(s.quality); });
+
+            Array.from(qualSet).forEach(q => {
                 const matchingStream = displayStreams.find(s => (s.quality || '').includes(q) || (s.server || '').includes(q));
                 const pill = document.createElement('button');
-                pill.className = 'q-pill' + ((matchingStream && activeServerStream === matchingStream) ? ' active' : '') + (matchingStream ? '' : ' unavail');
+                const isActive = (matchingStream && activeServerStream === matchingStream);
+                pill.className = 'q-pill' + (isActive ? ' active' : '') + (matchingStream ? '' : ' unavail');
                 pill.textContent = q;
                 if (matchingStream) {
                     pill.onclick = () => {
@@ -985,18 +1000,21 @@
                 qRow.appendChild(pill);
             });
 
+            // Populate all found stream resolution options in server-list
             displayStreams.forEach((st, idx) => {
                 const btn = document.createElement('button');
-                btn.className = 'srv-btn' + (activeServerStream === st || (!activeServerStream && idx === 0) ? ' active' : '');
+                const isCurrentActive = (activeServerStream === st || (!activeServerStream && idx === 0));
+                btn.className = 'srv-btn' + (isCurrentActive ? ' active' : '');
 
                 const nameSpan = document.createElement('span');
                 nameSpan.textContent = st.server || `AnimeGG Server ${idx + 1}`;
                 btn.appendChild(nameSpan);
 
-                if (st.quality) {
+                const badgeText = (st.quality || '') + (st.lang ? ` ${st.lang.toUpperCase()}` : '');
+                if (badgeText.trim()) {
                     const badge = document.createElement('span');
                     badge.className = 'srv-badge';
-                    badge.textContent = st.quality;
+                    badge.textContent = badgeText.trim();
                     btn.appendChild(badge);
                 }
 
@@ -1009,6 +1027,19 @@
 
                 srvList.appendChild(btn);
             });
+
+            // Update Servers toggle button label to show active resolution
+            if (srvBtn) {
+                const activeRes = activeServerStream ? activeServerStream.quality : (displayStreams[0] ? displayStreams[0].quality : '');
+                srvBtn.innerHTML = `
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="4" rx="1" />
+                        <rect x="2" y="10" width="20" height="4" rx="1" />
+                        <rect x="2" y="17" width="20" height="4" rx="1" />
+                    </svg>
+                    Servers (${activeRes ? activeRes : displayStreams.length + ' Streams'})
+                `;
+            }
         }
 
         function getBestHdStream(streams, lang) {
