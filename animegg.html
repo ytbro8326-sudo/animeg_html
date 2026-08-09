@@ -646,6 +646,10 @@
                             <polyline points="9 18 15 12 9 6" />
                         </svg>
                     </button>
+                    <div id="extract-spinner" style="display:none; align-items:center; gap:6px; color:#a78bfa; font-size:12px; font-weight:600; background:rgba(167, 139, 250, 0.12); padding:5px 12px; border-radius:8px; border:1px solid rgba(167, 139, 250, 0.25);">
+                        <div class="spin"></div>
+                        <span>Extracting...</span>
+                    </div>
                 </div>
 
                 <div id="srv-wrap">
@@ -723,6 +727,9 @@
         let currentLang = 'sub';
         let autoNextTimer = null;
         let activeServerStream = null;
+        let allExtractedStreams = [];
+        let cachedMalId = null;
+        let cachedEp = null;
         let _fetchToken = 0;
         const COUNTDOWN_S = 10;
 
@@ -874,9 +881,21 @@
             currentLang = lang;
             document.getElementById('btn-dub').classList.toggle('active', lang === 'dub');
             document.getElementById('btn-sub').classList.toggle('active', lang === 'sub');
-            const malId = document.getElementById('inp-mal').value.trim();
-            const ep = document.getElementById('inp-ep').value.trim();
-            if (malId && ep) showPlayer(malId, ep, lang);
+
+            const malId = String(document.getElementById('inp-mal').value).trim();
+            const ep = String(document.getElementById('inp-ep').value).trim();
+
+            if (allExtractedStreams && allExtractedStreams.length > 0 && cachedMalId === malId && cachedEp === ep) {
+                const best = getBestHdStream(allExtractedStreams, lang);
+                if (best) {
+                    playStream(best);
+                    renderServerPanel(allExtractedStreams);
+                } else {
+                    showPlayer(malId, ep, lang);
+                }
+            } else if (malId && ep) {
+                showPlayer(malId, ep, lang);
+            }
         }
 
         function playStream(stream) {
@@ -960,6 +979,7 @@
                         document.querySelectorAll('.q-pill').forEach(p => p.classList.remove('active'));
                         pill.classList.add('active');
                         playStream(matchingStream);
+                        renderServerPanel(allExtractedStreams);
                     };
                 }
                 qRow.appendChild(pill);
@@ -984,6 +1004,7 @@
                     document.querySelectorAll('.srv-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     playStream(st);
+                    renderServerPanel(allExtractedStreams);
                 };
 
                 srvList.appendChild(btn);
@@ -1015,6 +1036,9 @@
 
             document.title = `AnimeGG · MAL ${malId} · Ep ${ep} · ${lang.toUpperCase()}`;
 
+            const spinner = document.getElementById('extract-spinner');
+            if (spinner) spinner.style.display = 'flex';
+
             document.getElementById('srv-toggle-btn').classList.add('show');
             document.getElementById('quality-row').innerHTML = '';
             document.getElementById('server-list').innerHTML = '';
@@ -1028,6 +1052,10 @@
                 document.getElementById('sp-loading').style.display = 'none';
 
                 const streams = data.results.streams || [];
+                allExtractedStreams = streams;
+                cachedMalId = String(malId);
+                cachedEp = String(ep);
+
                 if (streams.length > 0) {
                     const best = getBestHdStream(streams, lang);
                     playStream(best);
@@ -1041,6 +1069,10 @@
                 document.getElementById('sp-loading').style.display = 'none';
                 document.getElementById('sp-error').style.display = 'block';
                 document.getElementById('sp-error').textContent = 'Error: ' + err.message;
+            } finally {
+                if (myToken === _fetchToken && spinner) {
+                    spinner.style.display = 'none';
+                }
             }
         }
 
