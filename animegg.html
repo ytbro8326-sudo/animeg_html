@@ -618,8 +618,8 @@
                 </div>
 
                 <div id="lang-toggle">
-                    <button id="btn-dub" onclick="setLang('dub')">DUB</button>
-                    <button id="btn-sub" class="active" onclick="setLang('sub')">SUB</button>
+                    <button id="btn-dub" class="active" onclick="setLang('dub')">DUB</button>
+                    <button id="btn-sub" onclick="setLang('sub')">SUB</button>
                 </div>
 
                 <div id="autonext-wrap">
@@ -724,7 +724,7 @@
 
         let datasetCache = null;
         let hlsInstance = null;
-        let currentLang = 'sub';
+        let currentLang = 'dub';
         let autoNextTimer = null;
         let activeServerStream = null;
         let allExtractedStreams = [];
@@ -817,20 +817,6 @@
             const dubEmbed = matchingEp.dub;
             const streams = [];
 
-            if (subEmbed) {
-                const subRes = await extractEmbedSources(subEmbed);
-                Object.keys(subRes).forEach(label => {
-                    streams.push({
-                        server: `AnimeGG SUB (${label})`,
-                        url: subRes[label],
-                        type: "mp4",
-                        quality: label,
-                        lang: "sub",
-                        embed_url: subEmbed
-                    });
-                });
-            }
-
             if (dubEmbed) {
                 const dubRes = await extractEmbedSources(dubEmbed);
                 Object.keys(dubRes).forEach(label => {
@@ -845,9 +831,23 @@
                 });
             }
 
+            if (subEmbed) {
+                const subRes = await extractEmbedSources(subEmbed);
+                Object.keys(subRes).forEach(label => {
+                    streams.push({
+                        server: `AnimeGG SUB (${label})`,
+                        url: subRes[label],
+                        type: "mp4",
+                        quality: label,
+                        lang: "sub",
+                        embed_url: subEmbed
+                    });
+                });
+            }
+
             if (streams.length === 0) {
-                if (subEmbed) streams.push({ server: "AnimeGG SUB (Embed)", url: subEmbed, type: "iframe", quality: "Embed", lang: "sub" });
                 if (dubEmbed) streams.push({ server: "AnimeGG DUB (Embed)", url: dubEmbed, type: "iframe", quality: "Embed", lang: "dub" });
+                if (subEmbed) streams.push({ server: "AnimeGG SUB (Embed)", url: subEmbed, type: "iframe", quality: "Embed", lang: "sub" });
             }
 
             return {
@@ -976,15 +976,17 @@
                 return;
             }
 
-            const langStreams = streams.filter(s => s.lang === currentLang);
-            const displayStreams = langStreams.length > 0 ? langStreams : streams;
-
-            // Dynamically gather all resolutions found
+            // Dynamically gather all resolutions found across all streams
             const qualSet = new Set(["1080p", "720p", "480p", "360p"]);
             streams.forEach(s => { if (s.quality && s.quality !== 'Embed') qualSet.add(s.quality); });
 
             Array.from(qualSet).forEach(q => {
-                const matchingStream = displayStreams.find(s => (s.quality || '').includes(q) || (s.server || '').includes(q));
+                // Find matching stream (preferring currentLang first, then any stream matching resolution q)
+                let matchingStream = streams.find(s => s.lang === currentLang && ((s.quality || '').includes(q) || (s.server || '').includes(q)));
+                if (!matchingStream) {
+                    matchingStream = streams.find(s => (s.quality || '').includes(q) || (s.server || '').includes(q));
+                }
+
                 const pill = document.createElement('button');
                 const isActive = (matchingStream && activeServerStream === matchingStream);
                 pill.className = 'q-pill' + (isActive ? ' active' : '') + (matchingStream ? '' : ' unavail');
@@ -994,14 +996,25 @@
                         document.querySelectorAll('.q-pill').forEach(p => p.classList.remove('active'));
                         pill.classList.add('active');
                         playStream(matchingStream);
+                        if (matchingStream.lang) {
+                            currentLang = matchingStream.lang;
+                            document.getElementById('btn-dub').classList.toggle('active', currentLang === 'dub');
+                            document.getElementById('btn-sub').classList.toggle('active', currentLang === 'sub');
+                        }
                         renderServerPanel(allExtractedStreams);
                     };
                 }
                 qRow.appendChild(pill);
             });
 
-            // Populate all found stream resolution options in server-list
-            displayStreams.forEach((st, idx) => {
+            // Show ALL extracted streams (both DUB and SUB) in server-list so user can select ANY stream resolution
+            const sortedStreams = [...streams].sort((a, b) => {
+                if (a.lang === currentLang && b.lang !== currentLang) return -1;
+                if (a.lang !== currentLang && b.lang === currentLang) return 1;
+                return 0;
+            });
+
+            sortedStreams.forEach((st, idx) => {
                 const btn = document.createElement('button');
                 const isCurrentActive = (activeServerStream === st || (!activeServerStream && idx === 0));
                 btn.className = 'srv-btn' + (isCurrentActive ? ' active' : '');
@@ -1022,40 +1035,65 @@
                     document.querySelectorAll('.srv-btn').forEach(b => b.classList.remove('active'));
                     btn.classList.add('active');
                     playStream(st);
+                    if (st.lang) {
+                        currentLang = st.lang;
+                        document.getElementById('btn-dub').classList.toggle('active', currentLang === 'dub');
+                        document.getElementById('btn-sub').classList.toggle('active', currentLang === 'sub');
+                    }
                     renderServerPanel(allExtractedStreams);
                 };
 
                 srvList.appendChild(btn);
             });
 
-            // Update Servers toggle button label to show active resolution
+            // Update Servers toggle button label to show active resolution and language
             if (srvBtn) {
-                const activeRes = activeServerStream ? activeServerStream.quality : (displayStreams[0] ? displayStreams[0].quality : '');
+                const activeRes = activeServerStream ? `${activeServerStream.quality} ${activeServerStream.lang ? activeServerStream.lang.toUpperCase() : ''}` : '';
                 srvBtn.innerHTML = `
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="2" y="3" width="20" height="4" rx="1" />
                         <rect x="2" y="10" width="20" height="4" rx="1" />
                         <rect x="2" y="17" width="20" height="4" rx="1" />
                     </svg>
-                    Servers (${activeRes ? activeRes : displayStreams.length + ' Streams'})
+                    Servers (${activeRes.trim() ? activeRes.trim() : streams.length + ' Streams'})
                 `;
             }
         }
 
-        function getBestHdStream(streams, lang) {
+        function getBestHdStream(streams, preferredLang = 'dub') {
             if (!streams || streams.length === 0) return null;
-            const targetLangStreams = streams.filter(s => s.lang === lang);
-            const list = targetLangStreams.length > 0 ? targetLangStreams : streams;
-
             const priority = ["1080p", "720p", "480p", "360p"];
+
+            // 1. Try preferred language first (DUB by default) with highest resolution
+            const prefStreams = streams.filter(s => s.lang === preferredLang);
+            if (prefStreams.length > 0) {
+                for (const res of priority) {
+                    const found = prefStreams.find(s => (s.quality || s.server || '').includes(res));
+                    if (found) return found;
+                }
+                return prefStreams[0];
+            }
+
+            // 2. Fallback to alternate language (SUB) if preferred language (DUB) has no streams
+            const altLang = preferredLang === 'dub' ? 'sub' : 'dub';
+            const altStreams = streams.filter(s => s.lang === altLang);
+            if (altStreams.length > 0) {
+                for (const res of priority) {
+                    const found = altStreams.find(s => (s.quality || s.server || '').includes(res));
+                    if (found) return found;
+                }
+                return altStreams[0];
+            }
+
+            // 3. Fallback to any stream
             for (const res of priority) {
-                const found = list.find(s => (s.quality || s.server || '').includes(res));
+                const found = streams.find(s => (s.quality || s.server || '').includes(res));
                 if (found) return found;
             }
-            return list[0];
+            return streams[0];
         }
 
-        async function showPlayer(malId, ep, lang = 'sub') {
+        async function showPlayer(malId, ep, lang = 'dub') {
             cancelAutoNext();
             currentLang = lang;
             const myToken = ++_fetchToken;
@@ -1166,8 +1204,47 @@
 
             const pathMatch = path.match(/\/(\d+)\/(\d+)(?:\/(dub|sub))?\/?$/i);
             if (pathMatch) {
-                return { malId: pathMatch[1], epNum: pathMatch[2], lang: pathMatch[3] || 'sub' };
+                return { malId: pathMatch[1], epNum: pathMatch[2], lang: pathMatch[3] || 'dub' };
             }
+
+            const queryDirectMatch = search.match(/\?(\d+)[\/&](\d+)(?:[\/&](dub|sub))?/i);
+            if (queryDirectMatch) {
+                return { malId: queryDirectMatch[1], epNum: queryDirectMatch[2], lang: queryDirectMatch[3] || 'dub' };
+            }
+
+            const searchParams = new URLSearchParams(search);
+            const qMal = searchParams.get('mal_id') || searchParams.get('malId') || searchParams.get('id');
+            const qEp = searchParams.get('ep') || searchParams.get('ep_num') || searchParams.get('episode');
+            const qLang = searchParams.get('lang') || searchParams.get('type');
+            if (qMal && qEp) {
+                return { malId: qMal, epNum: qEp, lang: qLang || 'dub' };
+            }
+
+            const hashMatch = hash.match(/#\/?(\d+)[\/&](\d+)(?:[\/&](dub|sub))?/i);
+            if (hashMatch) {
+                return { malId: hashMatch[1], epNum: hashMatch[2], lang: hashMatch[3] || 'dub' };
+            }
+
+            return null;
+        }
+
+        window.AnimeGGAPI = {
+            getStreams: getAnimeGGStreams,
+            search: searchAnimeGG,
+            loadDatasets: loadAllDatasets,
+            getProxyUrl: getProxyUrl
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const params = parseParamsFromUrl();
+            if (params) {
+                showPlayer(params.malId, params.epNum, params.lang);
+            }
+        });
+    </script>
+</body>
+
+</html>
 
             const queryDirectMatch = search.match(/\?(\d+)[\/&](\d+)(?:[\/&](dub|sub))?/i);
             if (queryDirectMatch) {
