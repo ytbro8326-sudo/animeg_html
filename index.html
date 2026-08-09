@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AnimeGG Stream Extractor (Client-Side JS)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    :root {
+      --bg: #07090e;
+      --card-bg: rgba(18, 22, 33, 0.78);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent-gradient: linear-gradient(135deg, #e11d48 0%, #a855f7 100%);
+      --accent-glow: rgba(225, 29, 72, 0.35);
+      --text: #f3f4f6;
+      --subtext: #9ca3af;
+      --code-bg: #0d1117;
+      --success: #10b981;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 10% 10%, rgba(225, 29, 72, 0.15) 0px, transparent 50%),
+        radial-gradient(at 90% 90%, rgba(168, 85, 247, 0.12) 0px, transparent 50%);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    header { text-align: center; margin-bottom: 8px; }
+
+    .badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: rgba(225, 29, 72, 0.15);
+      border: 1px solid rgba(225, 29, 72, 0.3);
+      color: #fb7185;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+
+    header p { color: var(--subtext); font-size: 1rem; }
+
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 16px;
+      align-items: flex-end;
+    }
+
+    @media (max-width: 640px) {
+      .input-grid { grid-template-columns: 1fr; }
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 8px; }
+    .form-group label { font-size: 0.85rem; font-weight: 600; color: #d1d5db; }
+
+    input {
+      background: rgba(10, 14, 23, 0.8);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: #fff;
+      font-size: 0.95rem;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    input:focus {
+      border-color: #e11d48;
+      box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.25);
+    }
+
+    .btn {
+      background: var(--accent-gradient);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 24px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      height: 46px;
+      box-shadow: 0 4px 15px var(--accent-glow);
+      transition: transform 0.15s ease, opacity 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:hover { opacity: 0.92; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+
+    .presets {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .preset-title { font-size: 0.8rem; color: var(--subtext); margin-right: 4px; }
+
+    .chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: #e5e7eb;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .chip:hover {
+      background: rgba(225, 29, 72, 0.2);
+      border-color: #e11d48;
+    }
+
+    .results-card { display: none; }
+
+    .meta-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .anime-title { font-size: 1.25rem; font-weight: 700; color: #fff; }
+
+    .player-wrap {
+      margin-bottom: 20px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--card-border);
+      background: #000;
+    }
+
+    video {
+      width: 100%;
+      max-height: 480px;
+      display: block;
+    }
+
+    .url-box {
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .url-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      color: #34d399;
+      word-break: break-all;
+    }
+
+    .btn-action {
+      background: rgba(255, 255, 255, 0.08);
+      border: none;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s ease;
+    }
+
+    .btn-action:hover { background: rgba(255, 255, 255, 0.18); }
+
+    .btn-play {
+      background: var(--accent-gradient);
+      color: #fff;
+    }
+
+    pre {
+      background: var(--code-bg);
+      padding: 16px;
+      border-radius: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      color: #93c5fd;
+      overflow-x: auto;
+      max-height: 400px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .tab {
+      padding: 8px 16px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--subtext);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab.active { color: #e11d48; border-bottom-color: #e11d48; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--success);
+      color: white;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      display: none;
+      box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+      z-index: 1000;
+    }
+
+    .loader {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #ffffff;
+      border-bottom-color: transparent;
+      border-radius: 50%;
+      display: inline-block;
+      animation: rotation 1s linear infinite;
+    }
+
+    @keyframes rotation {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge">Pure JavaScript AnimeGG Extractor</div>
+      <h1>AnimeGG Client Extractor</h1>
+      <p>Full client-side stream resolution using GitHub datasets and web fetch</p>
+    </header>
+
+    <div class="card">
+      <div class="input-grid">
+        <div class="form-group">
+          <label for="malId">MyAnimeList ID (MAL ID)</label>
+          <input type="number" id="malId" value="21" placeholder="e.g. 21">
+        </div>
+        <div class="form-group">
+          <label for="epNum">Episode Number</label>
+          <input type="number" id="epNum" value="1" placeholder="e.g. 1">
+        </div>
+        <button class="btn" id="btnFetch">
+          <span id="btnText">Extract Streams</span>
+          <span id="btnSpinner" style="display:none;"><span class="loader"></span></span>
+        </button>
+      </div>
+
+      <div class="presets">
+        <span class="preset-title">Quick Presets:</span>
+        <div class="chip" onclick="setPreset(21, 1)">One Piece Ep 1</div>
+        <div class="chip" onclick="setPreset(20, 220)">Naruto Ep 220</div>
+        <div class="chip" onclick="setPreset(1735, 1)">Naruto Shippuden Ep 1</div>
+        <div class="chip" onclick="setPreset(30276, 1)">One Punch Man Ep 1</div>
+        <div class="chip" onclick="setPreset(60425, 1)">MAL 60425 Ep 1</div>
+      </div>
+    </div>
+
+    <div class="card results-card" id="resultsCard">
+      <div class="meta-bar">
+        <div>
+          <div class="anime-title" id="resTitle">Anime Title</div>
+          <div style="font-size: 0.8rem; color: var(--subtext); margin-top: 4px;" id="resSub">AnimeGG Stream Output</div>
+        </div>
+      </div>
+
+      <div class="player-wrap" id="playerWrap" style="display:none;">
+        <video id="videoPlayer" controls autoplay></video>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('streamsTab', this)">Formatted Streams</div>
+        <div class="tab" onclick="switchTab('jsonTab', this)">Raw JSON Response</div>
+      </div>
+
+      <div class="tab-content active" id="streamsTab">
+        <div class="url-list" id="streamsList"></div>
+      </div>
+
+      <div class="tab-content" id="jsonTab">
+        <pre class="json-box" id="jsonBox">{}</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Copied to clipboard!</div>
+
+  <script>
+    const DATASET_URLS = [
+      "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series.json",
+      "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series2.json",
+      "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series3.json",
+      "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series4.json",
+      "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series5.json",
+      "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series6.json",
+    ];
+
+    let datasetCache = null;
+    let hlsInstance = null;
+
+    async function loadAllDatasets() {
+      if (datasetCache) return datasetCache;
+      try {
+        const promises = DATASET_URLS.map(url => fetch(url).then(r => r.ok ? r.json() : []).catch(() => []));
+        const results = await Promise.all(promises);
+        datasetCache = results.flat();
+        return datasetCache;
+      } catch (err) {
+        throw new Error("Failed to load AnimeGG datasets: " + err.message);
+      }
+    }
+
+    async function searchAnimeGG(malId) {
+      const datasets = await loadAllDatasets();
+      return datasets.find(item => item.mal_id === parseInt(malId));
+    }
+
+    async function fetchEmbedPage(embedUrl) {
+      const proxyUrls = [];
+
+      // If running on a server with /proxy route, try local proxy first
+      if (window.location.origin && window.location.protocol.startsWith('http') && !window.location.origin.includes('github.io')) {
+        proxyUrls.push(window.location.origin + `/proxy?url=${encodeURIComponent(embedUrl)}`);
+      }
+
+      // Public CORS proxies fallback for static GitHub Pages / standalone deployment
+      proxyUrls.push(
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(embedUrl)}`,
+        `https://corsproxy.io/?${encodeURIComponent(embedUrl)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`
+      );
+
+      for (const pUrl of proxyUrls) {
+        try {
+          const res = await fetch(pUrl);
+          if (res.ok) {
+            const html = await res.text();
+            if (html.includes("videoSources")) return html;
+          }
+        } catch (e) {}
+      }
+      throw new Error("Could not fetch AnimeGG embed page via CORS proxies");
+    }
+
+    async function extractEmbedSources(embedUrl) {
+      try {
+        const html = await fetchEmbedPage(embedUrl);
+        const vsMatch = html.match(/var videoSources\s*=\s*(\[.*?\])\s*;/s);
+        if (!vsMatch) return {};
+
+        const sources = [];
+        const regex = /\{file:\s*"([^"]+)".*?label:\s*"([^"]+)"/gs;
+        let match;
+        while ((match = regex.exec(vsMatch[1])) !== null) {
+          sources.push({ file: match[1], label: match[2] });
+        }
+
+        const results = {};
+        for (const src of sources) {
+          let proxyUrl = src.file.startsWith("/") ? "https://www.animegg.org" + src.file : src.file;
+          results[src.label] = proxyUrl;
+        }
+        return results;
+      } catch (e) {
+        return {};
+      }
+    }
+
+    async function getAnimeGGStreams(malId, epNum) {
+      const animeEntry = await searchAnimeGG(malId);
+      if (!animeEntry) throw new Error(`MAL ID ${malId} not found in AnimeGG datasets`);
+
+      const title = animeEntry.title || `Anime ${malId}`;
+      const episodes = animeEntry.episodes || [];
+      const matchingEp = episodes.find(ep => ep.ep === parseInt(epNum));
+
+      if (!matchingEp) throw new Error(`Episode ${epNum} for MAL ID ${malId} ('${title}') not found`);
+
+      const subEmbed = matchingEp.sub;
+      const dubEmbed = matchingEp.dub;
+      const streams = [];
+
+      if (subEmbed) {
+        const subRes = await extractEmbedSources(subEmbed);
+        Object.keys(subRes).forEach(label => {
+          streams.push({
+            server: `AnimeGG SUB (${label})`,
+            url: subRes[label],
+            type: "mp4",
+            quality: `SUB ${label}`,
+            embed_url: subEmbed
+          });
+        });
+      }
+
+      if (dubEmbed) {
+        const dubRes = await extractEmbedSources(dubEmbed);
+        Object.keys(dubRes).forEach(label => {
+          streams.push({
+            server: `AnimeGG DUB (${label})`,
+            url: dubRes[label],
+            type: "mp4",
+            quality: `DUB ${label}`,
+            embed_url: dubEmbed
+          });
+        });
+      }
+
+      if (streams.length === 0) {
+        // Fallback: Return raw embed URLs if direct video parsing had no matches
+        if (subEmbed) streams.push({ server: "AnimeGG SUB (Embed)", url: subEmbed, type: "iframe", quality: "SUB Embed" });
+        if (dubEmbed) streams.push({ server: "AnimeGG DUB (Embed)", url: dubEmbed, type: "iframe", quality: "DUB Embed" });
+      }
+
+      return {
+        status: "success",
+        server: "AnimeGG",
+        malId: parseInt(malId),
+        episode: parseInt(epNum),
+        animeTitle: title,
+        subEmbed: subEmbed,
+        dubEmbed: dubEmbed,
+        results: {
+          stream_url: streams.length > 0 ? streams[0].url : null,
+          streams: streams
+        }
+      };
+    }
+
+    function playStream(url) {
+      const playerWrap = document.getElementById('playerWrap');
+      const video = document.getElementById('videoPlayer');
+      playerWrap.style.display = 'block';
+
+      if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+
+      if (url.includes('.m3u8')) {
+        if (Hls.isSupported()) {
+          hlsInstance = new Hls();
+          hlsInstance.loadSource(url);
+          hlsInstance.attachMedia(video);
+          hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = url;
+          video.play();
+        }
+      } else {
+        video.src = url;
+        video.play();
+      }
+    }
+
+    function setPreset(malId, ep) {
+      document.getElementById('malId').value = malId;
+      document.getElementById('epNum').value = ep;
+      document.getElementById('btnFetch').click();
+    }
+
+    function switchTab(tabId, tabEl) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      tabEl.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+    }
+
+    function copyText(text) {
+      navigator.clipboard.writeText(text);
+      showToast("Copied to clipboard!");
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 2000);
+    }
+
+    const btn = document.getElementById('btnFetch');
+    const btnText = document.getElementById('btnText');
+    const btnSpinner = document.getElementById('btnSpinner');
+    const resultsCard = document.getElementById('resultsCard');
+
+    btn.onclick = async () => {
+      const malId = document.getElementById('malId').value.trim();
+      const epNum = document.getElementById('epNum').value.trim();
+
+      if (!malId || !epNum) {
+        alert("Please enter MAL ID and Episode number.");
+        return;
+      }
+
+      btnText.style.display = 'none';
+      btnSpinner.style.display = 'inline-block';
+      btn.disabled = true;
+
+      try {
+        const data = await getAnimeGGStreams(malId, epNum);
+
+        document.getElementById('resTitle').textContent = `${data.animeTitle || 'Anime'} - Ep ${epNum}`;
+        document.getElementById('resSub').textContent = `MAL ID: ${malId} | Episode: ${epNum}`;
+
+        const streamsList = document.getElementById('streamsList');
+        streamsList.innerHTML = '';
+
+        const streams = data.results.streams || [];
+        if (streams.length > 0) {
+          playStream(streams[0].url);
+          streams.forEach((st, idx) => {
+            const div = document.createElement('div');
+            div.className = 'url-box';
+            div.innerHTML = `
+              <div>
+                <strong style="font-size:0.8rem; color:#fff;">${st.server || 'Stream'}</strong>
+                <div class="url-text" id="streamUrl_${idx}">${st.url}</div>
+              </div>
+              <div style="display:flex; gap:6px; flex-shrink:0;">
+                <button class="btn-action btn-play" onclick="playStream('${st.url}')">▶ Play</button>
+                <button class="btn-action" onclick="copyText('${st.url}')">Copy</button>
+              </div>
+            `;
+            streamsList.appendChild(div);
+          });
+        } else {
+          streamsList.innerHTML = '<p style="color:var(--subtext);">No direct stream URLs found for this episode.</p>';
+        }
+
+        document.getElementById('jsonBox').textContent = JSON.stringify(data, null, 2);
+        resultsCard.style.display = 'block';
+
+      } catch (err) {
+        alert("Error: " + err.message);
+      } finally {
+        btnText.style.display = 'inline';
+        btnSpinner.style.display = 'none';
+        btn.disabled = false;
+      }
+    };
+
+    // Global API object for programmatic client-side usage
+    window.AnimeGGAPI = {
+      getStreams: getAnimeGGStreams,
+      search: searchAnimeGG,
+      loadDatasets: loadAllDatasets
+    };
+  </script>
+</body>
+</html>
