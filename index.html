@@ -487,7 +487,7 @@
             color: #fff;
         }
 
-        /* Source badge for pre-extracted vs live */
+        /* Source badge for pre-extracted vs live (server list) */
         .src-badge {
             font-size: 9px;
             padding: 1px 5px;
@@ -506,6 +506,34 @@
             background: rgba(167, 139, 250, 0.18);
             color: #a78bfa;
             border: 1px solid rgba(167, 139, 250, 0.3);
+        }
+
+        /* Persistent source status pill (topbar) */
+        #stream-source-badge {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            flex-shrink: 0;
+            transition: background .2s, color .2s, border-color .2s;
+        }
+        #stream-source-badge.show { display: flex; }
+        #stream-source-badge.db {
+            background: rgba(74, 222, 128, 0.12);
+            color: #4ade80;
+            border: 1px solid rgba(74, 222, 128, 0.28);
+        }
+        #stream-source-badge.live {
+            background: rgba(167, 139, 250, 0.12);
+            color: #a78bfa;
+            border: 1px solid rgba(167, 139, 250, 0.28);
+        }
+        #stream-source-badge svg {
+            flex-shrink: 0;
         }
 
         #sp-loading {
@@ -670,6 +698,11 @@
                     <div id="extract-spinner" style="display:none; align-items:center; gap:6px; color:#a78bfa; font-size:12px; font-weight:600; background:rgba(167, 139, 250, 0.12); padding:5px 12px; border-radius:8px; border:1px solid rgba(167, 139, 250, 0.25);">
                         <div class="spin"></div>
                         <span id="extract-status-text">Extracting...</span>
+                    </div>
+
+                    <div id="stream-source-badge">
+                        <svg id="source-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></svg>
+                        <span id="source-label">—</span>
                     </div>
                 </div>
 
@@ -960,7 +993,7 @@
                 const preStreams = queryPreExtracted(preData, malId, epNum);
 
                 if (preStreams && preStreams.length > 0) {
-                    setExtractStatus('hide');
+                    setExtractStatus('db');
                     return {
                         status: 'success',
                         server: 'AnimeGG (Pre-extracted)',
@@ -975,7 +1008,7 @@
                 setExtractStatus('loading', 'Live extracting...');
                 const { streams, title } = await liveExtractStreams(malId, epNum);
 
-                setExtractStatus('hide');
+                setExtractStatus('live');
                 return {
                     status: 'success',
                     server: 'AnimeGG (Live)',
@@ -991,14 +1024,39 @@
         }
 
         function setExtractStatus(state, text) {
-            const spinner = document.getElementById('extract-spinner');
+            const spinner    = document.getElementById('extract-spinner');
             const statusText = document.getElementById('extract-status-text');
+            const badge      = document.getElementById('stream-source-badge');
+            const icon       = document.getElementById('source-icon');
+            const label      = document.getElementById('source-label');
+
             if (!spinner) return;
+
             if (state === 'hide') {
                 spinner.style.display = 'none';
-            } else {
+            } else if (state === 'loading') {
                 spinner.style.display = 'flex';
                 if (statusText && text) statusText.textContent = text;
+                // hide result badge while loading
+                if (badge) badge.classList.remove('show', 'db', 'live');
+            } else if (state === 'db') {
+                // Came from pre-extracted JSON database
+                spinner.style.display = 'none';
+                if (badge && icon && label) {
+                    badge.className = 'show db';
+                    // database icon
+                    icon.innerHTML = `<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>`;
+                    label.textContent = '✦ JSON Database';
+                }
+            } else if (state === 'live') {
+                // Came from live extraction
+                spinner.style.display = 'none';
+                if (badge && icon && label) {
+                    badge.className = 'show live';
+                    // zap / live icon
+                    icon.innerHTML = `<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>`;
+                    label.textContent = '⚡ Live Extracted';
+                }
             }
         }
 
@@ -1048,6 +1106,9 @@
             document.title = `AnimeGG · MAL ${malId} · Ep ${ep} · ${lang.toUpperCase()}`;
 
             setExtractStatus('loading', 'Checking pre-extracted...');
+            // hide any previous source badge while loading new episode
+            const _badge = document.getElementById('stream-source-badge');
+            if (_badge) _badge.classList.remove('show', 'db', 'live');
 
             document.getElementById('srv-toggle-btn').classList.add('show');
             document.getElementById('quality-row').innerHTML = '';
@@ -1080,8 +1141,12 @@
                 document.getElementById('sp-loading').style.display = 'none';
                 document.getElementById('sp-error').style.display = 'block';
                 document.getElementById('sp-error').textContent = 'Error: ' + err.message;
+                setExtractStatus('hide');
             } finally {
-                if (myToken === _fetchToken) setExtractStatus('hide');
+                if (myToken === _fetchToken) {
+                    const spinner = document.getElementById('extract-spinner');
+                    if (spinner && spinner.style.display !== 'none') setExtractStatus('hide');
+                }
             }
         }
 
