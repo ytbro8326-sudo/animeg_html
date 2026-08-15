@@ -487,6 +487,27 @@
             color: #fff;
         }
 
+        /* Source badge for pre-extracted vs live */
+        .src-badge {
+            font-size: 9px;
+            padding: 1px 5px;
+            border-radius: 8px;
+            margin-left: 4px;
+            flex-shrink: 0;
+            font-weight: 700;
+            letter-spacing: .03em;
+        }
+        .src-badge.pre {
+            background: rgba(74, 222, 128, 0.18);
+            color: #4ade80;
+            border: 1px solid rgba(74, 222, 128, 0.3);
+        }
+        .src-badge.live {
+            background: rgba(167, 139, 250, 0.18);
+            color: #a78bfa;
+            border: 1px solid rgba(167, 139, 250, 0.3);
+        }
+
         #sp-loading {
             display: flex;
             align-items: center;
@@ -648,11 +669,7 @@
                     </button>
                     <div id="extract-spinner" style="display:none; align-items:center; gap:6px; color:#a78bfa; font-size:12px; font-weight:600; background:rgba(167, 139, 250, 0.12); padding:5px 12px; border-radius:8px; border:1px solid rgba(167, 139, 250, 0.25);">
                         <div class="spin"></div>
-                        <span>Extracting...</span>
-                    </div>
-                    <div id="prefetch-status" style="display:none; align-items:center; gap:5px; color:#4ade80; font-size:12px; font-weight:600; background:rgba(74, 222, 128, 0.12); padding:5px 12px; border-radius:8px; border:1px solid rgba(74, 222, 128, 0.25);">
-                        <span id="prefetch-icon">✓</span>
-                        <span id="prefetch-status-text">+50 Ep Ready</span>
+                        <span id="extract-status-text">Extracting...</span>
                     </div>
                 </div>
 
@@ -717,6 +734,11 @@
     </div>
 
     <script>
+        // ─── Pre-extracted streams JSON (primary source) ───────────────────────────
+        const PREEXTRACTED_JSON_URL =
+            "https://raw.githubusercontent.com/ytbro8326-sudo/animegg_streams-extractor/refs/heads/main/output/animegg_streams.json";
+
+        // ─── Fallback: embed datasets for live extraction ──────────────────────────
         const DATASET_URLS = [
             "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series.json",
             "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series2.json",
@@ -726,7 +748,8 @@
             "https://raw.githubusercontent.com/dokkarrr/final_animgeg_embed-scraper/refs/heads/main/output/animegg_series6.json",
         ];
 
-        let datasetCache = null;
+        let preExtractedCache = null;   // full pre-extracted JSON array (loaded once)
+        let datasetCache = null;        // embed datasets (lazy loaded only if needed)
         let hlsInstance = null;
         let currentLang = 'dub';
         let autoNextTimer = null;
@@ -736,20 +759,79 @@
         let cachedEp = null;
         let _fetchToken = 0;
         const COUNTDOWN_S = 10;
-
         const streamCache = new Map();
-        let preFetchAbortToken = 0;
 
+        // ─── Proxy helper ──────────────────────────────────────────────────────────
         function getProxyUrl(url) {
             if (!url) return '';
             if (url.startsWith('https://anivexa.onrender.com/proxy')) return url;
             return `https://anivexa.onrender.com/proxy?url=${encodeURIComponent(url)}&referer=https://www.animegg.org/`;
         }
 
+        // ══════════════════════════════════════════════════════════════════════════
+        //  PRE-EXTRACTED JSON — load once, query instantly
+        // ══════════════════════════════════════════════════════════════════════════
+
+        async function loadPreExtracted() {
+            if (preExtractedCache) return preExtractedCache;
+            try {
+                const res = await fetch(PREEXTRACTED_JSON_URL);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                preExtractedCache = await res.json();
+                return preExtractedCache;
+            } catch (e) {
+                preExtractedCache = [];   // mark as attempted so we don't retry endlessly
+                return [];
+            }
+        }
+
+        /**
+         * Query the pre-extracted JSON for a given malId + episode.
+         * The JSON has flat keys like: dub_ep_1_360p, sub_ep_2_720p, ...
+         * Returns an array of stream objects (same shape as live extraction),
+         * or null if this mal_id/episode combo isn't in the JSON at all.
+         */
+        function queryPreExtracted(data, malId, epNum) {
+            const entry = data.find(item => String(item.mal_id) === String(malId));
+            if (!entry) return null;
+
+            const epInt = parseInt(epNum, 10);
+            const resolutions = ['360p', '480p', '720p', '1080p'];
+            const langs = ['dub', 'sub'];
+            const streams = [];
+
+            for (const lang of langs) {
+                for (const res of resolutions) {
+                    const key = `${lang}_ep_${epInt}_${res}`;
+                    const url = entry[key];
+                    if (url) {
+                        streams.push({
+                            server: `AnimeGG ${lang.toUpperCase()} (${res})`,
+                            url: url,
+                            type: 'mp4',
+                            quality: res,
+                            lang: lang,
+                            source: 'pre'   // tag so UI can show badge
+                        });
+                    }
+                }
+            }
+
+            // Return null if the entry exists for this mal_id but has NO keys for
+            // this specific episode — that means we should try live extraction.
+            if (streams.length === 0) return null;
+            return streams;
+        }
+
+        // ══════════════════════════════════════════════════════════════════════════
+        //  LIVE EXTRACTION (fallback)
+        // ══════════════════════════════════════════════════════════════════════════
+
         async function loadAllDatasets() {
             if (datasetCache) return datasetCache;
             try {
-                const promises = DATASET_URLS.map(url => fetch(url).then(r => r.ok ? r.json() : []).catch(() => []));
+                const promises = DATASET_URLS.map(url =>
+                    fetch(url).then(r => r.ok ? r.json() : []).catch(() => []));
                 const results = await Promise.all(promises);
                 datasetCache = results.flat();
                 return datasetCache;
@@ -765,7 +847,8 @@
 
         async function fetchEmbedPage(embedUrl) {
             const proxyUrls = [];
-            if (window.location.origin && window.location.protocol.startsWith('http') && !window.location.origin.includes('github.io')) {
+            if (window.location.origin && window.location.protocol.startsWith('http') &&
+                !window.location.origin.includes('github.io')) {
                 proxyUrls.push(window.location.origin + `/proxy?url=${encodeURIComponent(embedUrl)}`);
             }
             proxyUrls.push(
@@ -801,8 +884,8 @@
 
                 const results = {};
                 for (const src of sources) {
-                    let proxyUrl = src.file.startsWith("/") ? "https://www.animegg.org" + src.file : src.file;
-                    results[src.label] = proxyUrl;
+                    let url = src.file.startsWith("/") ? "https://www.animegg.org" + src.file : src.file;
+                    results[src.label] = url;
                 }
                 return results;
             } catch (e) {
@@ -810,71 +893,96 @@
             }
         }
 
-        async function getAnimeGGStreams(malId, epNum) {
-            const cacheKey = `${malId}_${epNum}`;
-            if (streamCache.has(cacheKey)) {
-                return await streamCache.get(cacheKey);
+        async function liveExtractStreams(malId, epNum) {
+            const animeEntry = await searchAnimeGG(malId);
+            if (!animeEntry) throw new Error(`MAL ID ${malId} not found in AnimeGG datasets`);
+
+            const title = animeEntry.title || `Anime ${malId}`;
+            const episodes = animeEntry.episodes || [];
+            const matchingEp = episodes.find(ep => ep.ep === parseInt(epNum));
+            if (!matchingEp) throw new Error(`Episode ${epNum} for MAL ID ${malId} ('${title}') not found`);
+
+            const subEmbed = matchingEp.sub;
+            const dubEmbed = matchingEp.dub;
+            const streams = [];
+
+            if (dubEmbed) {
+                const dubRes = await extractEmbedSources(dubEmbed);
+                Object.keys(dubRes).forEach(label => {
+                    streams.push({
+                        server: `AnimeGG DUB (${label})`,
+                        url: dubRes[label],
+                        type: 'mp4',
+                        quality: label,
+                        lang: 'dub',
+                        embed_url: dubEmbed,
+                        source: 'live'
+                    });
+                });
             }
 
+            if (subEmbed) {
+                const subRes = await extractEmbedSources(subEmbed);
+                Object.keys(subRes).forEach(label => {
+                    streams.push({
+                        server: `AnimeGG SUB (${label})`,
+                        url: subRes[label],
+                        type: 'mp4',
+                        quality: label,
+                        lang: 'sub',
+                        embed_url: subEmbed,
+                        source: 'live'
+                    });
+                });
+            }
+
+            // Fallback to embed iframes if video sources couldn't be extracted
+            if (streams.length === 0) {
+                if (dubEmbed) streams.push({ server: 'AnimeGG DUB (Embed)', url: dubEmbed, type: 'iframe', quality: 'Embed', lang: 'dub', source: 'live' });
+                if (subEmbed) streams.push({ server: 'AnimeGG SUB (Embed)', url: subEmbed, type: 'iframe', quality: 'Embed', lang: 'sub', source: 'live' });
+            }
+
+            return { streams, title };
+        }
+
+        // ══════════════════════════════════════════════════════════════════════════
+        //  MAIN ENTRY: pre-extracted first, live fallback
+        // ══════════════════════════════════════════════════════════════════════════
+
+        async function getAnimeGGStreams(malId, epNum) {
+            const cacheKey = `${malId}_${epNum}`;
+            if (streamCache.has(cacheKey)) return await streamCache.get(cacheKey);
+
             const fetchPromise = (async () => {
-                const animeEntry = await searchAnimeGG(malId);
-                if (!animeEntry) throw new Error(`MAL ID ${malId} not found in AnimeGG datasets`);
+                // ── 1. Try pre-extracted JSON first (fast, no CORS proxies needed) ──
+                setExtractStatus('loading', 'Checking pre-extracted...');
+                const preData = await loadPreExtracted();
+                const preStreams = queryPreExtracted(preData, malId, epNum);
 
-                const title = animeEntry.title || `Anime ${malId}`;
-                const episodes = animeEntry.episodes || [];
-                const matchingEp = episodes.find(ep => ep.ep === parseInt(epNum));
-
-                if (!matchingEp) throw new Error(`Episode ${epNum} for MAL ID ${malId} ('${title}') not found`);
-
-                const subEmbed = matchingEp.sub;
-                const dubEmbed = matchingEp.dub;
-                const streams = [];
-
-                if (dubEmbed) {
-                    const dubRes = await extractEmbedSources(dubEmbed);
-                    Object.keys(dubRes).forEach(label => {
-                        streams.push({
-                            server: `AnimeGG DUB (${label})`,
-                            url: dubRes[label],
-                            type: "mp4",
-                            quality: label,
-                            lang: "dub",
-                            embed_url: dubEmbed
-                        });
-                    });
+                if (preStreams && preStreams.length > 0) {
+                    setExtractStatus('hide');
+                    return {
+                        status: 'success',
+                        server: 'AnimeGG (Pre-extracted)',
+                        malId: parseInt(malId),
+                        episode: parseInt(epNum),
+                        animeTitle: (preData.find(i => String(i.mal_id) === String(malId)) || {}).title || `Anime ${malId}`,
+                        results: { stream_url: preStreams[0].url, streams: preStreams }
+                    };
                 }
 
-                if (subEmbed) {
-                    const subRes = await extractEmbedSources(subEmbed);
-                    Object.keys(subRes).forEach(label => {
-                        streams.push({
-                            server: `AnimeGG SUB (${label})`,
-                            url: subRes[label],
-                            type: "mp4",
-                            quality: label,
-                            lang: "sub",
-                            embed_url: subEmbed
-                        });
-                    });
-                }
+                // ── 2. Not in pre-extracted JSON → live extraction ─────────────────
+                setExtractStatus('loading', 'Live extracting...');
+                const { streams, title } = await liveExtractStreams(malId, epNum);
 
-                if (streams.length === 0) {
-                    if (dubEmbed) streams.push({ server: "AnimeGG DUB (Embed)", url: dubEmbed, type: "iframe", quality: "Embed", lang: "dub" });
-                    if (subEmbed) streams.push({ server: "AnimeGG SUB (Embed)", url: subEmbed, type: "iframe", quality: "Embed", lang: "sub" });
-                }
-
+                setExtractStatus('hide');
                 return {
-                    status: "success",
-                    server: "AnimeGG",
+                    status: 'success',
+                    server: 'AnimeGG (Live)',
                     malId: parseInt(malId),
                     episode: parseInt(epNum),
                     animeTitle: title,
-                    subEmbed: subEmbed,
-                    dubEmbed: dubEmbed,
-                    results: {
-                        stream_url: streams.length > 0 ? streams[0].url : null,
-                        streams: streams
-                    }
+                    results: { stream_url: streams.length > 0 ? streams[0].url : null, streams }
                 };
             })();
 
@@ -882,60 +990,151 @@
             return await fetchPromise;
         }
 
-        async function preExtractNextEpisodes(malId, currentEpNum, totalToFetch = 50) {
-            const myPrefetchToken = ++preFetchAbortToken;
-            const startEp = parseInt(currentEpNum, 10) + 1;
-            const statusEl = document.getElementById('prefetch-status');
-            const statusIcon = document.getElementById('prefetch-icon');
-            const statusText = document.getElementById('prefetch-status-text');
-
-            const animeEntry = await searchAnimeGG(malId);
-            if (!animeEntry || !animeEntry.episodes) return;
-
-            const episodes = animeEntry.episodes;
-            const maxEp = Math.max(...episodes.map(e => e.ep));
-            const endEp = Math.min(startEp + totalToFetch - 1, maxEp);
-            const targetCount = Math.max(0, endEp - startEp + 1);
-
-            if (targetCount === 0) return;
-
-            if (statusEl && statusText) {
-                statusEl.style.display = 'flex';
-                statusEl.style.color = '#a78bfa';
-                statusEl.style.background = 'rgba(167, 139, 250, 0.12)';
-                statusEl.style.borderColor = 'rgba(167, 139, 250, 0.25)';
-                if (statusIcon) statusIcon.textContent = '⚡';
-                statusText.textContent = `Pre-extracting +${targetCount} Ep...`;
+        function setExtractStatus(state, text) {
+            const spinner = document.getElementById('extract-spinner');
+            const statusText = document.getElementById('extract-status-text');
+            if (!spinner) return;
+            if (state === 'hide') {
+                spinner.style.display = 'none';
+            } else {
+                spinner.style.display = 'flex';
+                if (statusText && text) statusText.textContent = text;
             }
+        }
 
-            let fetchedCount = 0;
-            for (let ep = startEp; ep <= endEp; ep++) {
-                if (myPrefetchToken !== preFetchAbortToken) return;
+        // ══════════════════════════════════════════════════════════════════════════
+        //  PLAYER LOGIC
+        // ══════════════════════════════════════════════════════════════════════════
 
-                const cacheKey = `${malId}_${ep}`;
-                if (!streamCache.has(cacheKey)) {
-                    try {
-                        await getAnimeGGStreams(malId, ep);
-                        if (myPrefetchToken !== preFetchAbortToken) return;
-                    } catch (e) {
-                        // Silently handle background prefetch errors
-                    }
-                    await new Promise(r => setTimeout(r, 350));
+        function getBestHdStream(streams, preferredLang = 'dub') {
+            if (!streams || streams.length === 0) return null;
+            const priority = ['1080p', '720p', '480p', '360p'];
+
+            const prefStreams = streams.filter(s => s.lang === preferredLang);
+            if (prefStreams.length > 0) {
+                for (const res of priority) {
+                    const found = prefStreams.find(s => (s.quality || s.server || '').includes(res));
+                    if (found) return found;
                 }
-                fetchedCount++;
-                if (statusText && myPrefetchToken === preFetchAbortToken) {
-                    statusText.textContent = `Pre-extracting (${fetchedCount}/${targetCount})...`;
-                }
+                return prefStreams[0];
             }
 
-            if (myPrefetchToken === preFetchAbortToken && statusEl && statusText) {
-                statusEl.style.display = 'flex';
-                statusEl.style.color = '#4ade80';
-                statusEl.style.background = 'rgba(74, 222, 128, 0.12)';
-                statusEl.style.borderColor = 'rgba(74, 222, 128, 0.25)';
-                if (statusIcon) statusIcon.textContent = '✓';
-                statusText.textContent = `+${targetCount} Ep Ready`;
+            const altLang = preferredLang === 'dub' ? 'sub' : 'dub';
+            const altStreams = streams.filter(s => s.lang === altLang);
+            if (altStreams.length > 0) {
+                for (const res of priority) {
+                    const found = altStreams.find(s => (s.quality || s.server || '').includes(res));
+                    if (found) return found;
+                }
+                return altStreams[0];
             }
+
+            for (const res of priority) {
+                const found = streams.find(s => (s.quality || s.server || '').includes(res));
+                if (found) return found;
+            }
+            return streams[0];
+        }
+
+        async function showPlayer(malId, ep, lang = 'dub') {
+            cancelAutoNext();
+            currentLang = lang;
+            const myToken = ++_fetchToken;
+
+            document.getElementById('inp-mal').value = malId;
+            document.getElementById('inp-ep').value = ep;
+            document.getElementById('btn-dub').classList.toggle('active', lang === 'dub');
+            document.getElementById('btn-sub').classList.toggle('active', lang === 'sub');
+            document.title = `AnimeGG · MAL ${malId} · Ep ${ep} · ${lang.toUpperCase()}`;
+
+            setExtractStatus('loading', 'Checking pre-extracted...');
+
+            document.getElementById('srv-toggle-btn').classList.add('show');
+            document.getElementById('quality-row').innerHTML = '';
+            document.getElementById('server-list').innerHTML = '';
+            document.getElementById('sp-error').style.display = 'none';
+            document.getElementById('sp-loading').style.display = 'flex';
+
+            try {
+                const data = await getAnimeGGStreams(malId, ep);
+                if (myToken !== _fetchToken) return;
+
+                document.getElementById('sp-loading').style.display = 'none';
+
+                const streams = data.results.streams || [];
+                allExtractedStreams = streams;
+                cachedMalId = String(malId);
+                cachedEp = String(ep);
+
+                if (streams.length > 0) {
+                    const best = getBestHdStream(streams, lang);
+                    playStream(best);
+                    renderServerPanel(streams);
+                } else {
+                    document.getElementById('sp-error').style.display = 'block';
+                    document.getElementById('sp-error').textContent =
+                        `No streams available for MAL ${malId} Ep ${ep}.`;
+                }
+            } catch (err) {
+                if (myToken !== _fetchToken) return;
+                document.getElementById('sp-loading').style.display = 'none';
+                document.getElementById('sp-error').style.display = 'block';
+                document.getElementById('sp-error').textContent = 'Error: ' + err.message;
+            } finally {
+                if (myToken === _fetchToken) setExtractStatus('hide');
+            }
+        }
+
+        function loadPlayer() {
+            const malId = document.getElementById('inp-mal').value.trim();
+            const ep = document.getElementById('inp-ep').value.trim();
+            if (!malId || !ep) { alert('Please enter both MAL ID and episode number.'); return; }
+            showPlayer(malId, ep, currentLang);
+        }
+
+        function goPrevEp() {
+            const malId = document.getElementById('inp-mal').value.trim();
+            const ep = parseInt(document.getElementById('inp-ep').value.trim(), 10);
+            if (!malId || isNaN(ep) || ep <= 1) return;
+            showPlayer(malId, ep - 1, currentLang);
+        }
+
+        function goNextEp() {
+            const malId = document.getElementById('inp-mal').value.trim();
+            const ep = parseInt(document.getElementById('inp-ep').value.trim(), 10);
+            if (!malId || isNaN(ep)) return;
+            showPlayer(malId, ep + 1, currentLang);
+        }
+
+        function triggerAutoNext(malId, ep, lang) {
+            if (!document.getElementById('chk-autonext').checked) return;
+            const nextEp = parseInt(ep, 10) + 1;
+            document.getElementById('an-ep-label').textContent = `Episode ${nextEp}`;
+            const overlay = document.getElementById('autonext-overlay');
+            const bar = document.getElementById('an-bar');
+            overlay.style.display = 'block';
+            bar.style.transition = 'none';
+            bar.style.transform = 'scaleX(1)';
+            bar.getBoundingClientRect();
+            bar.style.transition = `transform ${COUNTDOWN_S}s linear`;
+            bar.style.transform = 'scaleX(0)';
+            let remaining = COUNTDOWN_S;
+            autoNextTimer = setInterval(() => { if (--remaining <= 0) goNextNow(); }, 1000);
+        }
+
+        function goNextNow() {
+            cancelAutoNext();
+            const malId = document.getElementById('inp-mal').value.trim();
+            const ep = parseInt(document.getElementById('inp-ep').value.trim(), 10);
+            if (!malId || isNaN(ep)) return;
+            showPlayer(malId, ep + 1, currentLang);
+        }
+
+        function cancelAutoNext() {
+            clearInterval(autoNextTimer);
+            autoNextTimer = null;
+            const overlay = document.getElementById('autonext-overlay');
+            if (overlay) overlay.style.display = 'none';
         }
 
         function toggleBar() {
@@ -958,7 +1157,8 @@
             const malId = String(document.getElementById('inp-mal').value).trim();
             const ep = String(document.getElementById('inp-ep').value).trim();
 
-            if (allExtractedStreams && allExtractedStreams.length > 0 && cachedMalId === malId && cachedEp === ep) {
+            if (allExtractedStreams && allExtractedStreams.length > 0 &&
+                cachedMalId === malId && cachedEp === ep) {
                 const best = getBestHdStream(allExtractedStreams, lang);
                 if (best) {
                     playStream(best);
@@ -1049,15 +1249,18 @@
                 return;
             }
 
-            // Dynamically gather all resolutions found across all streams
-            const qualSet = new Set(["1080p", "720p", "480p", "360p"]);
+            // Quality pills — one per resolution, prefer current lang
+            const qualSet = new Set(['1080p', '720p', '480p', '360p']);
             streams.forEach(s => { if (s.quality && s.quality !== 'Embed') qualSet.add(s.quality); });
 
             Array.from(qualSet).forEach(q => {
-                // Find matching stream (preferring currentLang first, then any stream matching resolution q)
-                let matchingStream = streams.find(s => s.lang === currentLang && ((s.quality || '').includes(q) || (s.server || '').includes(q)));
+                let matchingStream = streams.find(
+                    s => s.lang === currentLang && ((s.quality || '').includes(q) || (s.server || '').includes(q))
+                );
                 if (!matchingStream) {
-                    matchingStream = streams.find(s => (s.quality || '').includes(q) || (s.server || '').includes(q));
+                    matchingStream = streams.find(
+                        s => (s.quality || '').includes(q) || (s.server || '').includes(q)
+                    );
                 }
 
                 const pill = document.createElement('button');
@@ -1080,7 +1283,7 @@
                 qRow.appendChild(pill);
             });
 
-            // Show ALL extracted streams (both DUB and SUB) in server-list so user can select ANY stream resolution
+            // Server list — all streams sorted by preferred lang first
             const sortedStreams = [...streams].sort((a, b) => {
                 if (a.lang === currentLang && b.lang !== currentLang) return -1;
                 if (a.lang !== currentLang && b.lang === currentLang) return 1;
@@ -1096,13 +1299,28 @@
                 nameSpan.textContent = st.server || `AnimeGG Server ${idx + 1}`;
                 btn.appendChild(nameSpan);
 
+                const right = document.createElement('span');
+                right.style.display = 'flex';
+                right.style.alignItems = 'center';
+                right.style.gap = '3px';
+
+                // Source badge: pre-extracted (green) or live (purple)
+                if (st.source) {
+                    const srcBadge = document.createElement('span');
+                    srcBadge.className = 'src-badge ' + st.source;
+                    srcBadge.textContent = st.source === 'pre' ? 'PRE' : 'LIVE';
+                    right.appendChild(srcBadge);
+                }
+
                 const badgeText = (st.quality || '') + (st.lang ? ` ${st.lang.toUpperCase()}` : '');
                 if (badgeText.trim()) {
                     const badge = document.createElement('span');
                     badge.className = 'srv-badge';
                     badge.textContent = badgeText.trim();
-                    btn.appendChild(badge);
+                    right.appendChild(badge);
                 }
+
+                btn.appendChild(right);
 
                 btn.onclick = () => {
                     document.querySelectorAll('.srv-btn').forEach(b => b.classList.remove('active'));
@@ -1119,9 +1337,11 @@
                 srvList.appendChild(btn);
             });
 
-            // Update Servers toggle button label to show active resolution and language
+            // Update Servers button label
             if (srvBtn) {
-                const activeRes = activeServerStream ? `${activeServerStream.quality} ${activeServerStream.lang ? activeServerStream.lang.toUpperCase() : ''}` : '';
+                const activeRes = activeServerStream
+                    ? `${activeServerStream.quality} ${activeServerStream.lang ? activeServerStream.lang.toUpperCase() : ''}`
+                    : '';
                 srvBtn.innerHTML = `
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="2" y="3" width="20" height="4" rx="1" />
@@ -1131,148 +1351,6 @@
                     Servers (${activeRes.trim() ? activeRes.trim() : streams.length + ' Streams'})
                 `;
             }
-        }
-
-        function getBestHdStream(streams, preferredLang = 'dub') {
-            if (!streams || streams.length === 0) return null;
-            const priority = ["1080p", "720p", "480p", "360p"];
-
-            // 1. Try preferred language first (DUB by default) with highest resolution
-            const prefStreams = streams.filter(s => s.lang === preferredLang);
-            if (prefStreams.length > 0) {
-                for (const res of priority) {
-                    const found = prefStreams.find(s => (s.quality || s.server || '').includes(res));
-                    if (found) return found;
-                }
-                return prefStreams[0];
-            }
-
-            // 2. Fallback to alternate language (SUB) if preferred language (DUB) has no streams
-            const altLang = preferredLang === 'dub' ? 'sub' : 'dub';
-            const altStreams = streams.filter(s => s.lang === altLang);
-            if (altStreams.length > 0) {
-                for (const res of priority) {
-                    const found = altStreams.find(s => (s.quality || s.server || '').includes(res));
-                    if (found) return found;
-                }
-                return altStreams[0];
-            }
-
-            // 3. Fallback to any stream
-            for (const res of priority) {
-                const found = streams.find(s => (s.quality || s.server || '').includes(res));
-                if (found) return found;
-            }
-            return streams[0];
-        }
-
-        async function showPlayer(malId, ep, lang = 'dub') {
-            cancelAutoNext();
-            currentLang = lang;
-            const myToken = ++_fetchToken;
-
-            document.getElementById('inp-mal').value = malId;
-            document.getElementById('inp-ep').value = ep;
-            document.getElementById('btn-dub').classList.toggle('active', lang === 'dub');
-            document.getElementById('btn-sub').classList.toggle('active', lang === 'sub');
-
-            document.title = `AnimeGG · MAL ${malId} · Ep ${ep} · ${lang.toUpperCase()}`;
-
-            const spinner = document.getElementById('extract-spinner');
-            const prefetchStatus = document.getElementById('prefetch-status');
-            if (spinner) spinner.style.display = 'flex';
-            if (prefetchStatus) prefetchStatus.style.display = 'none';
-
-            document.getElementById('srv-toggle-btn').classList.add('show');
-            document.getElementById('quality-row').innerHTML = '';
-            document.getElementById('server-list').innerHTML = '';
-            document.getElementById('sp-error').style.display = 'none';
-            document.getElementById('sp-loading').style.display = 'flex';
-
-            try {
-                const data = await getAnimeGGStreams(malId, ep);
-                if (myToken !== _fetchToken) return;
-
-                document.getElementById('sp-loading').style.display = 'none';
-
-                const streams = data.results.streams || [];
-                allExtractedStreams = streams;
-                cachedMalId = String(malId);
-                cachedEp = String(ep);
-
-                if (streams.length > 0) {
-                    const best = getBestHdStream(streams, lang);
-                    playStream(best);
-                    renderServerPanel(streams);
-
-                    // Silently pre-extract next 50 episodes in background after current episode plays
-                    preExtractNextEpisodes(malId, ep, 50);
-                } else {
-                    document.getElementById('sp-error').style.display = 'block';
-                    document.getElementById('sp-error').textContent = `No streams available for MAL ${malId} Ep ${ep}.`;
-                }
-            } catch (err) {
-                if (myToken !== _fetchToken) return;
-                document.getElementById('sp-loading').style.display = 'none';
-                document.getElementById('sp-error').style.display = 'block';
-                document.getElementById('sp-error').textContent = 'Error: ' + err.message;
-            } finally {
-                if (myToken === _fetchToken && spinner) {
-                    spinner.style.display = 'none';
-                }
-            }
-        }
-
-        function loadPlayer() {
-            const malId = document.getElementById('inp-mal').value.trim();
-            const ep = document.getElementById('inp-ep').value.trim();
-            if (!malId || !ep) { alert('Please enter both MAL ID and episode number.'); return; }
-            showPlayer(malId, ep, currentLang);
-        }
-
-        function goPrevEp() {
-            const malId = document.getElementById('inp-mal').value.trim();
-            const ep = parseInt(document.getElementById('inp-ep').value.trim(), 10);
-            if (!malId || isNaN(ep) || ep <= 1) return;
-            showPlayer(malId, ep - 1, currentLang);
-        }
-
-        function goNextEp() {
-            const malId = document.getElementById('inp-mal').value.trim();
-            const ep = parseInt(document.getElementById('inp-ep').value.trim(), 10);
-            if (!malId || isNaN(ep)) return;
-            showPlayer(malId, ep + 1, currentLang);
-        }
-
-        function triggerAutoNext(malId, ep, lang) {
-            if (!document.getElementById('chk-autonext').checked) return;
-            const nextEp = parseInt(ep, 10) + 1;
-            document.getElementById('an-ep-label').textContent = `Episode ${nextEp}`;
-            const overlay = document.getElementById('autonext-overlay');
-            const bar = document.getElementById('an-bar');
-            overlay.style.display = 'block';
-            bar.style.transition = 'none';
-            bar.style.transform = 'scaleX(1)';
-            bar.getBoundingClientRect();
-            bar.style.transition = `transform ${COUNTDOWN_S}s linear`;
-            bar.style.transform = 'scaleX(0)';
-            let remaining = COUNTDOWN_S;
-            autoNextTimer = setInterval(() => { if (--remaining <= 0) goNextNow(); }, 1000);
-        }
-
-        function goNextNow() {
-            cancelAutoNext();
-            const malId = document.getElementById('inp-mal').value.trim();
-            const ep = parseInt(document.getElementById('inp-ep').value.trim(), 10);
-            if (!malId || isNaN(ep)) return;
-            showPlayer(malId, ep + 1, currentLang);
-        }
-
-        function cancelAutoNext() {
-            clearInterval(autoNextTimer);
-            autoNextTimer = null;
-            const overlay = document.getElementById('autonext-overlay');
-            if (overlay) overlay.style.display = 'none';
         }
 
         function parseParamsFromUrl() {
@@ -1310,47 +1388,13 @@
             getStreams: getAnimeGGStreams,
             search: searchAnimeGG,
             loadDatasets: loadAllDatasets,
+            loadPreExtracted: loadPreExtracted,
+            queryPreExtracted: queryPreExtracted,
             getProxyUrl: getProxyUrl
         };
 
-        window.addEventListener('DOMContentLoaded', () => {
-            const params = parseParamsFromUrl();
-            if (params) {
-                showPlayer(params.malId, params.epNum, params.lang);
-            }
-        });
-    </script>
-</body>
-
-</html>
-
-            const queryDirectMatch = search.match(/\?(\d+)[\/&](\d+)(?:[\/&](dub|sub))?/i);
-            if (queryDirectMatch) {
-                return { malId: queryDirectMatch[1], epNum: queryDirectMatch[2], lang: queryDirectMatch[3] || 'sub' };
-            }
-
-            const searchParams = new URLSearchParams(search);
-            const qMal = searchParams.get('mal_id') || searchParams.get('malId') || searchParams.get('id');
-            const qEp = searchParams.get('ep') || searchParams.get('ep_num') || searchParams.get('episode');
-            const qLang = searchParams.get('lang') || searchParams.get('type');
-            if (qMal && qEp) {
-                return { malId: qMal, epNum: qEp, lang: qLang || 'sub' };
-            }
-
-            const hashMatch = hash.match(/#\/?(\d+)[\/&](\d+)(?:[\/&](dub|sub))?/i);
-            if (hashMatch) {
-                return { malId: hashMatch[1], epNum: hashMatch[2], lang: hashMatch[3] || 'sub' };
-            }
-
-            return null;
-        }
-
-        window.AnimeGGAPI = {
-            getStreams: getAnimeGGStreams,
-            search: searchAnimeGG,
-            loadDatasets: loadAllDatasets,
-            getProxyUrl: getProxyUrl
-        };
+        // Start loading the pre-extracted JSON as soon as the page loads (background)
+        loadPreExtracted();
 
         window.addEventListener('DOMContentLoaded', () => {
             const params = parseParamsFromUrl();
